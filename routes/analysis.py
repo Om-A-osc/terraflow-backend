@@ -52,7 +52,7 @@ router = APIRouter(prefix="/api", tags=["Analysis"])
     ),
 )
 async def analyze_contour(
-    file: UploadFile = File(..., description="KML or KMZ contour map file"),
+    contour_map: UploadFile = File(..., description="KML or KMZ contour map file"),
     resolution: float = Query(
         5.0, ge=1.0, le=50.0,
         description="DEM grid resolution in meters (smaller = more precise but slower)"
@@ -81,14 +81,14 @@ async def analyze_contour(
 
     # ── Validate file ────────────────────────────────────────────────────
 
-    filename = file.filename or "upload.kml"
+    filename = contour_map.filename or "upload.kml"
     if not filename.lower().endswith((".kml", ".kmz")):
         raise HTTPException(
             status_code=400,
             detail="Invalid file format. Please upload a KML or KMZ file."
         )
 
-    file_bytes = await file.read()
+    file_bytes = await contour_map.read()
     if len(file_bytes) == 0:
         raise HTTPException(status_code=400, detail="Uploaded file is empty.")
 
@@ -325,9 +325,9 @@ async def analyze_contour(
     include_in_schema=False,
 )
 async def find_catchment(
-    file: UploadFile = File(...),
+    contour_map: UploadFile = File(...),
     resolution: float = Query(5.0, ge=1.0, le=50.0),
     num_candidates: int = Query(5, ge=1, le=20),
 ):
     """Alias for /analyzeContour."""
-    return await analyze_contour(file, resolution, num_candidates)
+    return await analyze_contour(contour_map, resolution, num_candidates)
