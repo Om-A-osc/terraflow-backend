@@ -107,8 +107,8 @@ async def analyze_contour(
     # ── Step 2: Generate DEM ─────────────────────────────────────────────
 
     # We request extra candidates internally so that after water-body
-    # filtering we still have enough to return the requested amount.
-    OVERSAMPLE_FACTOR = 5
+    # filtering and depression deduplication we still have enough.
+    OVERSAMPLE_FACTOR = 8
     config = AnalysisConfig(
         dem_resolution_m=resolution,
         num_candidates=num_candidates * OVERSAMPLE_FACTOR,
@@ -183,7 +183,7 @@ async def analyze_contour(
 
     # ── Step 6: Catchment + Volume for each remaining candidate ──────────
 
-    pond_candidates = []
+    pond_candidates_raw = []
     for i, cand in enumerate(candidates):
         # Catchment delineation
         try:
@@ -214,6 +214,7 @@ async def analyze_contour(
                 "volume_m3": 0.0,
                 "surface_area_m2": 0.0,
                 "pond_footprint": None,
+                "basin_label": -1,
             }
 
         # Convert grid position to lon/lat
@@ -224,25 +225,58 @@ async def analyze_contour(
         )
         lon, lat = to_wgs84.transform(utm_x, utm_y)
 
+        pond_candidates_raw.append({
+            "score": cand["score"],
+            "location": {"lat": round(float(lat), 6), "lon": round(float(lon), 6)},
+            "elevation_m": round(cand["elevation"], 2),
+            "depression_depth_m": round(cand["depression_depth"], 2),
+            "volume": volume,
+            "catchment": catchment,
+            "twi": round(cand["twi"], 2),
+            "slope_deg": round(cand["slope_deg"], 2),
+            "basin_label": volume.get("basin_label", -1),
+        })
+
+    # ── Deduplicate: keep only the best candidate per depression basin ────
+
+    seen_basins = set()
+    deduped = []
+    for pc in pond_candidates_raw:
+        bl = pc["basin_label"]
+        if bl >= 0 and bl in seen_basins:
+            logger.info(
+                f"  Skipping duplicate candidate at ({pc['location']['lat']}, "
+                f"{pc['location']['lon']}) — same depression basin #{bl}"
+            )
+            continue
+        if bl >= 0:
+            seen_basins.add(bl)
+        deduped.append(pc)
+
+    # Trim to user-requested count and assign final ranks
+    deduped = deduped[:num_candidates]
+
+    pond_candidates = []
+    for i, pc in enumerate(deduped):
         pond_candidates.append(PondCandidate(
             rank=i + 1,
-            score=round(cand["score"], 4),
-            location={"lat": round(float(lat), 6), "lon": round(float(lon), 6)},
-            elevation_m=round(cand["elevation"], 2),
-            depression_depth_m=round(cand["depression_depth"], 2),
-            estimated_volume_m3=round(volume["volume_m3"], 2),
-            estimated_surface_area_m2=round(volume["surface_area_m2"], 2),
+            score=round(pc["score"], 4),
+            location=pc["location"],
+            elevation_m=pc["elevation_m"],
+            depression_depth_m=pc["depression_depth_m"],
+            estimated_volume_m3=round(pc["volume"]["volume_m3"], 2),
+            estimated_surface_area_m2=round(pc["volume"]["surface_area_m2"], 2),
             catchment=CatchmentInfo(
-                area_km2=catchment["area_km2"],
-                polygon=catchment["polygon"],
+                area_km2=pc["catchment"]["area_km2"],
+                polygon=pc["catchment"]["polygon"],
             ),
-            pond_footprint=volume.get("pond_footprint"),
-            twi=round(cand["twi"], 2),
-            slope_deg=round(cand["slope_deg"], 2),
+            pond_footprint=pc["volume"].get("pond_footprint"),
+            twi=pc["twi"],
+            slope_deg=pc["slope_deg"],
         ))
 
     t6 = time.time()
-    logger.info(f"Catchment + volume: {t6 - t5b:.2f}s")
+    logger.info(f"Catchment + volume + dedup: {t6 - t5b:.2f}s, {len(pond_candidates)} final candidates")
 
     # ── Build response ───────────────────────────────────────────────────
 

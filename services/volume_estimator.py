@@ -77,7 +77,9 @@ def estimate_volume(
     if target_label == 0:
         # No depression found — estimate from the local topography
         logger.warning(f"No depression region found near ({row}, {col}), using local estimate")
-        return _local_volume_estimate(dem, row, col, resolution_m, cell_area)
+        result = _local_volume_estimate(dem, row, col, resolution_m, cell_area)
+        result["basin_label"] = -1  # unique fallback label
+        return result
 
     # Get cells belonging to this depression
     basin_mask = (labeled == target_label)
@@ -125,6 +127,7 @@ def estimate_volume(
         "rim_elevation_m": round(rim_elevation, 2),
         "mean_depth_m": round(mean_depth_m, 2),
         "pond_footprint": pond_footprint,
+        "basin_label": target_label,
     }
 
 
